@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: nexotrace-360
+    runtime: static
+    buildCommand: pnpm install --frozen-lockfile && pnpm build
+    staticPublishPath: ./dist
+    pullRequestPreviewsEnabled: true
