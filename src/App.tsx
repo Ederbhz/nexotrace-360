@@ -243,9 +243,9 @@ export default function App() {
         const evidence: Evidence = {
           id: uid("evidence"),
           title: "Dados cadastrais CNPJ",
-          source: "BrasilAPI CNPJ com dados publicos derivados da Receita Federal",
+          source: `${company.sourceName} com dados publicos derivados da Receita Federal`,
           sourceType: "Publica",
-          url: cnpjApiUrl(digits),
+          url: company.sourceUrl || cnpjApiUrl(digits),
           collectedAt,
           hash: evidenceHash,
           status: "Confirmada",

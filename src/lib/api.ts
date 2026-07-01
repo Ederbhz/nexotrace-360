@@ -38,6 +38,46 @@ interface BrasilApiCnpjResponse {
 }
 
 const CNPJ_ENDPOINT = "https://brasilapi.com.br/api/cnpj/v1";
+const CNPJ_WS_ENDPOINT = "https://publica.cnpj.ws/cnpj";
+
+interface CnpjWsResponse {
+  razao_social?: string;
+  capital_social?: string;
+  atualizado_em?: string;
+  porte?: { descricao?: string };
+  natureza_juridica?: { descricao?: string };
+  socios?: Array<{
+    cpf_cnpj_socio?: string;
+    nome?: string;
+    data_entrada?: string;
+    faixa_etaria?: string;
+    qualificacao_socio?: { descricao?: string };
+  }>;
+  estabelecimento?: {
+    cnpj?: string;
+    nome_fantasia?: string;
+    situacao_cadastral?: string;
+    data_situacao_cadastral?: string;
+    data_inicio_atividade?: string;
+    tipo?: string;
+    tipo_logradouro?: string;
+    logradouro?: string;
+    numero?: string;
+    complemento?: string | null;
+    bairro?: string;
+    cep?: string;
+    ddd1?: string;
+    telefone1?: string;
+    ddd2?: string | null;
+    telefone2?: string | null;
+    email?: string | null;
+    atualizado_em?: string;
+    atividade_principal?: { id?: string; descricao?: string };
+    atividades_secundarias?: Array<{ id?: string; descricao?: string }>;
+    estado?: { sigla?: string };
+    cidade?: { nome?: string };
+  };
+}
 
 function asCnae(code?: number, description?: string): Cnae | undefined {
   if (!code && !description) return undefined;
@@ -74,16 +114,39 @@ function mapPartners(qsa?: BrasilApiPartner[]): Partner[] {
   }));
 }
 
-export async function fetchCompanyByCnpj(cnpj: string): Promise<CompanyProfile> {
-  const digits = onlyDigits(cnpj);
-  const response = await fetch(`${CNPJ_ENDPOINT}/${digits}`);
+function mapCnpjWsPartners(socios?: CnpjWsResponse["socios"]): Partner[] {
+  return (socios || []).map((partner) => ({
+    name: partner.nome || "Nome nao informado",
+    documentMasked: partner.cpf_cnpj_socio,
+    qualification: partner.qualificacao_socio?.descricao?.trim(),
+    joinedAt: partner.data_entrada,
+    ageRange: partner.faixa_etaria,
+    confidence: "Media",
+  }));
+}
 
-  if (!response.ok) {
-    const details = response.status === 404 ? "CNPJ nao localizado na fonte publica." : "Fonte CNPJ indisponivel.";
-    throw new Error(details);
+async function fetchJsonWithTimeout<T>(url: string, label: string): Promise<T> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 15_000);
+
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const details = response.status === 404 ? "CNPJ nao localizado na fonte publica." : `${label} indisponivel.`;
+      throw new Error(details);
+    }
+
+    return (await response.json()) as T;
+  } finally {
+    window.clearTimeout(timeout);
   }
+}
 
-  const data = (await response.json()) as BrasilApiCnpjResponse;
+function mapBrasilApiCompany(data: BrasilApiCnpjResponse, digits: string): CompanyProfile {
   const primaryCnae = asCnae(data.cnae_fiscal, data.cnae_fiscal_descricao);
   const secondaryCnaes = (data.cnaes_secundarios || [])
     .map((item) => asCnae(item.codigo, item.descricao))
@@ -119,8 +182,81 @@ export async function fetchCompanyByCnpj(cnpj: string): Promise<CompanyProfile> 
       Boolean,
     ) as string[],
     partners: mapPartners(data.qsa),
+    sourceName: "BrasilAPI CNPJ",
+    sourceUrl: cnpjApiUrl(digits),
     raw: data,
   };
+}
+
+function mapCnpjWsCompany(data: CnpjWsResponse, digits: string): CompanyProfile {
+  const establishment = data.estabelecimento || {};
+  const primaryCnae = asCnae(
+    establishment.atividade_principal?.id ? Number(establishment.atividade_principal.id) : undefined,
+    establishment.atividade_principal?.descricao,
+  );
+  const secondaryCnaes = (establishment.atividades_secundarias || [])
+    .map((item) => asCnae(item.id ? Number(item.id) : undefined, item.descricao))
+    .filter(Boolean) as Cnae[];
+  const phone1 = normalizePhone(`${establishment.ddd1 || ""}${establishment.telefone1 || ""}`);
+  const phone2 = normalizePhone(`${establishment.ddd2 || ""}${establishment.telefone2 || ""}`);
+
+  return {
+    cnpj: establishment.cnpj || digits,
+    legalName: data.razao_social || "Razao social nao informada",
+    tradeName: establishment.nome_fantasia || undefined,
+    registrationStatus: establishment.situacao_cadastral || "Nao informado",
+    openedAt: establishment.data_inicio_atividade,
+    statusDate: establishment.data_situacao_cadastral,
+    legalNature: data.natureza_juridica?.descricao,
+    size: data.porte?.descricao,
+    headOfficeType: establishment.tipo,
+    capitalSocial: data.capital_social ? Number(data.capital_social) : undefined,
+    primaryCnae,
+    secondaryCnaes,
+    address: compact([
+      establishment.tipo_logradouro,
+      establishment.logradouro,
+      establishment.numero,
+      establishment.complemento,
+      establishment.bairro,
+      establishment.cidade?.nome,
+      establishment.estado?.sigla,
+      establishment.cep,
+    ]),
+    city: establishment.cidade?.nome,
+    state: establishment.estado?.sigla,
+    zipCode: establishment.cep,
+    email: establishment.email || undefined,
+    phones: [phone1, phone2].filter(Boolean) as string[],
+    partners: mapCnpjWsPartners(data.socios),
+    sourceName: "CNPJ.ws Publica",
+    sourceUrl: cnpjWsApiUrl(digits),
+    sourceUpdatedAt: establishment.atualizado_em || data.atualizado_em,
+    raw: data,
+  };
+}
+
+export async function fetchCompanyByCnpj(cnpj: string): Promise<CompanyProfile> {
+  const digits = onlyDigits(cnpj);
+  const errors: string[] = [];
+
+  try {
+    const data = await fetchJsonWithTimeout<BrasilApiCnpjResponse>(cnpjApiUrl(digits), "BrasilAPI");
+    return mapBrasilApiCompany(data, digits);
+  } catch (caught) {
+    errors.push(caught instanceof Error ? caught.message : "BrasilAPI indisponivel.");
+  }
+
+  try {
+    const data = await fetchJsonWithTimeout<CnpjWsResponse>(cnpjWsApiUrl(digits), "CNPJ.ws");
+    return mapCnpjWsCompany(data, digits);
+  } catch (caught) {
+    errors.push(caught instanceof Error ? caught.message : "CNPJ.ws indisponivel.");
+  }
+
+  throw new Error(
+    `Nao consegui acessar as fontes publicas de CNPJ agora. Verifique sua conexao ou tente novamente em alguns instantes. Detalhes: ${errors.join(" | ")}`,
+  );
 }
 
 export function buildExternalChecks(company: CompanyProfile): ExternalCheck[] {
@@ -177,3 +313,4 @@ export function buildExternalChecks(company: CompanyProfile): ExternalCheck[] {
 }
 
 export const cnpjApiUrl = (cnpj: string): string => `${CNPJ_ENDPOINT}/${onlyDigits(cnpj)}`;
+export const cnpjWsApiUrl = (cnpj: string): string => `${CNPJ_WS_ENDPOINT}/${onlyDigits(cnpj)}`;

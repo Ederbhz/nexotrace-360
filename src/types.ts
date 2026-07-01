@@ -63,6 +63,8 @@ export interface CompanyProfile {
   email?: string;
   phones: string[];
   partners: Partner[];
+  sourceName: string;
+  sourceUrl: string;
   sourceUpdatedAt?: string;
   raw: unknown;
 }
