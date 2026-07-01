@@ -1,4 +1,4 @@
-import type { Cnae, CompanyProfile, ExternalCheck, Partner } from "../types";
+import type { Cnae, CompanyProfile, ContractIntelligence, ExternalCheck, Partner } from "../types";
 import { onlyDigits } from "./validators";
 
 interface BrasilApiPartner {
@@ -259,9 +259,26 @@ export async function fetchCompanyByCnpj(cnpj: string): Promise<CompanyProfile> 
   );
 }
 
-export function buildExternalChecks(company: CompanyProfile): ExternalCheck[] {
+export function buildExternalChecks(company: CompanyProfile, contracts?: ContractIntelligence): ExternalCheck[] {
   const cnpj = onlyDigits(company.cnpj);
   const name = encodeURIComponent(`"${company.legalName}" OR "${cnpj}"`);
+  const contractStatus =
+    contracts?.status === "Consultado"
+      ? "Consultado"
+      : contracts?.status === "Requer chave"
+        ? "Requer chave"
+        : contracts?.status === "Indisponivel"
+          ? "Nao consultado"
+          : "Link de verificacao";
+  const contractNotes =
+    contracts?.status === "Consultado"
+      ? `${contracts.totalContracts} contrato(s) coletado(s), valor final somado ${contracts.totalFinalValue.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}.`
+      : contracts?.status === "Requer chave"
+        ? "Para coletar contratos federais por fornecedor, configure chave da API de Dados da CGU ou proxy Render."
+        : contracts?.status === "Indisponivel"
+          ? contracts.notes[contracts.notes.length - 1] || "Fonte de contratos indisponivel na tentativa de coleta."
+        : "Consulta oficial por CNPJ/razao social deve ser confirmada no portal.";
+  const supplierStatus = contracts?.supplierRegistry?.status === "Consultado" ? "Consultado" : "Link de verificacao";
 
   return [
     {
@@ -274,13 +291,34 @@ export function buildExternalChecks(company: CompanyProfile): ExternalCheck[] {
       notes: "Fonte oficial aberta em ambiente externo. Use o CNPJ consultado para confirmar o comprovante.",
     },
     {
+      id: "compras-fornecedor",
+      name: "Fornecedor Compras.gov.br",
+      source: "Compras.gov.br Dados Abertos",
+      url: contracts?.supplierRegistry?.sourceUrl || `https://dadosabertos.compras.gov.br/swagger-ui/index.html`,
+      status: supplierStatus,
+      confidence: contracts?.supplierRegistry?.status === "Consultado" ? "Alta" : "Indeterminada",
+      notes:
+        contracts?.supplierRegistry?.status === "Consultado"
+          ? `Fornecedor localizado. Habilitado para licitar: ${contracts.supplierRegistry.enabledToBid === false ? "nao" : "sim"}.`
+          : "Base oficial aberta de fornecedores. Pode ser consultada automaticamente quando disponivel.",
+    },
+    {
       id: "pncp",
       name: "Contratos e licitacoes",
       source: "PNCP",
-      url: `https://pncp.gov.br/app/editais?q=${cnpj}`,
+      url: contracts?.pncpSearchUrl || `https://pncp.gov.br/app/contratos?pagina=1&q=${cnpj}&status=todos`,
       status: "Link de verificacao",
       confidence: "Alta",
-      notes: "Consulta oficial por CNPJ/razao social deve ser confirmada no portal.",
+      notes: "Link oficial filtrado no PNCP para conferencia de contratos, editais e documentos relacionados.",
+    },
+    {
+      id: "portal-contratos",
+      name: "Contratos por fornecedor",
+      source: "Portal da Transparencia",
+      url: contracts?.portalTransparencyUrl || "https://portaldatransparencia.gov.br/contratos/consulta",
+      status: contractStatus,
+      confidence: contracts?.status === "Consultado" ? "Alta" : "Indeterminada",
+      notes: contractNotes,
     },
     {
       id: "sancoes",

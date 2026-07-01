@@ -2,6 +2,11 @@ import type { AuditEntry, Dossier } from "../types";
 
 const DOSSIER_KEY = "nexotrace:dossiers";
 const AUDIT_KEY = "nexotrace:audit";
+const CONNECTOR_SETTINGS_KEY = "nexotrace:connector-settings";
+
+export interface ConnectorSettings {
+  portalTransparencyApiKey?: string;
+}
 
 function readList<T>(key: string): T[] {
   try {
@@ -37,7 +42,22 @@ export function saveAudit(entry: AuditEntry): AuditEntry[] {
   return next;
 }
 
+export function loadConnectorSettings(): ConnectorSettings {
+  try {
+    const value = localStorage.getItem(CONNECTOR_SETTINGS_KEY);
+    return value ? (JSON.parse(value) as ConnectorSettings) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveConnectorSettings(settings: ConnectorSettings): ConnectorSettings {
+  localStorage.setItem(CONNECTOR_SETTINGS_KEY, JSON.stringify(settings));
+  return settings;
+}
+
 export function clearWorkspace(): void {
   localStorage.removeItem(DOSSIER_KEY);
   localStorage.removeItem(AUDIT_KEY);
+  localStorage.removeItem(CONNECTOR_SETTINGS_KEY);
 }

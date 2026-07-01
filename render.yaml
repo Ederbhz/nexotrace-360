@@ -1,7 +1,10 @@
 services:
   - type: web
     name: nexotrace-360
-    runtime: static
+    runtime: node
     buildCommand: pnpm install --frozen-lockfile && pnpm build
-    staticPublishPath: ./dist
+    startCommand: pnpm start
     pullRequestPreviewsEnabled: true
+    envVars:
+      - key: PORTAL_TRANSPARENCIA_API_KEY
+        sync: false

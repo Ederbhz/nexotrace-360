@@ -575,7 +575,7 @@ a {
 
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 14px;
 }
@@ -602,7 +602,8 @@ a {
 
 .metric-card strong {
   color: var(--text);
-  font-size: 24px;
+  font-size: 22px;
+  overflow-wrap: anywhere;
 }
 
 .tabs {
@@ -669,6 +670,12 @@ a {
   color: var(--muted-strong);
   border-color: var(--line-soft);
   background: rgba(5, 12, 21, 0.74);
+}
+
+.warning-box {
+  color: #ffe4a8;
+  border-color: rgba(244, 184, 74, 0.34);
+  background: var(--gold-soft);
 }
 
 .factor-list {
@@ -846,6 +853,16 @@ td {
   line-height: 1.4;
 }
 
+td strong,
+td small {
+  display: block;
+}
+
+td small {
+  margin-top: 4px;
+  color: var(--muted);
+}
+
 tr:last-child td {
   border-bottom: 0;
 }
@@ -924,6 +941,36 @@ tr:last-child td {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 380px;
   gap: 14px;
+}
+
+.contract-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 0.75fr);
+  gap: 14px;
+}
+
+.contract-summary {
+  margin-bottom: 4px;
+}
+
+.contract-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.contract-actions a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 11px;
+  color: var(--cyan);
+  text-decoration: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(5, 12, 21, 0.7);
 }
 
 .evidence-topline {
@@ -1015,7 +1062,8 @@ tr:last-child td {
     width: 100%;
   }
 
-  .source-strip {
+  .source-strip,
+  .metric-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
@@ -1051,7 +1099,8 @@ tr:last-child td {
 
   .empty-state,
   .overview-grid,
-  .evidence-layout {
+  .evidence-layout,
+  .contract-layout {
     grid-template-columns: 1fr;
   }
 

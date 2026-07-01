@@ -69,6 +69,65 @@ export interface CompanyProfile {
   raw: unknown;
 }
 
+export type PublicDataProvider =
+  | "Portal da Transparencia"
+  | "Compras.gov.br Dados Abertos"
+  | "PNCP"
+  | "NexoTrace Proxy";
+
+export interface SupplierRegistry {
+  source: PublicDataProvider;
+  status: "Consultado" | "Nao localizado" | "Indisponivel";
+  sourceUrl: string;
+  collectedAt: string;
+  enabledToBid?: boolean;
+  legalName?: string;
+  cnae?: string;
+  legalNature?: string;
+  size?: string;
+  city?: string;
+  state?: string;
+  notes?: string;
+  raw?: unknown;
+}
+
+export interface PublicContract {
+  id: string;
+  source: PublicDataProvider;
+  sourceUrl?: string;
+  number?: string;
+  process?: string;
+  object: string;
+  agency?: string;
+  unit?: string;
+  supplierName?: string;
+  status?: string;
+  modality?: string;
+  signedAt?: string;
+  startDate?: string;
+  endDate?: string;
+  initialValue?: number;
+  finalValue?: number;
+  pncpControlNumber?: string;
+  raw?: unknown;
+}
+
+export interface ContractIntelligence {
+  cnpj: string;
+  collectedAt: string;
+  source: PublicDataProvider;
+  status: "Consultado" | "Sem resultado" | "Requer chave" | "Indisponivel";
+  totalContracts: number;
+  activeContracts: number;
+  totalInitialValue: number;
+  totalFinalValue: number;
+  contracts: PublicContract[];
+  supplierRegistry?: SupplierRegistry;
+  portalTransparencyUrl: string;
+  pncpSearchUrl: string;
+  notes: string[];
+}
+
 export interface Evidence {
   id: string;
   title: string;
@@ -144,6 +203,7 @@ export interface Dossier {
   justification?: string;
   userProfile: UserProfile;
   company?: CompanyProfile;
+  contracts?: ContractIntelligence;
   cpfGate?: CpfGate;
   risk: RiskAssessment;
   evidences: Evidence[];

@@ -32,8 +32,17 @@ import {
 import { useMemo, useState, type CSSProperties, type FormEvent } from "react";
 import { buildExternalChecks, cnpjApiUrl, fetchCompanyByCnpj } from "./lib/api";
 import { sha256 } from "./lib/hash";
+import { fetchContractIntelligence } from "./lib/publicContracts";
 import { calculateCompanyRisk, restrictedCpfRisk } from "./lib/risk";
-import { clearWorkspace, loadAudit, loadDossiers, saveAudit, saveDossier } from "./lib/storage";
+import {
+  clearWorkspace,
+  loadAudit,
+  loadConnectorSettings,
+  loadDossiers,
+  saveAudit,
+  saveConnectorSettings,
+  saveDossier,
+} from "./lib/storage";
 import {
   formatCnpj,
   formatCpf,
@@ -57,7 +66,7 @@ import type {
   UserProfile,
 } from "./types";
 
-type TabId = "overview" | "cadastro" | "socios" | "fontes" | "evidencias" | "auditoria";
+type TabId = "overview" | "cadastro" | "socios" | "contratos" | "fontes" | "evidencias" | "auditoria";
 
 const logoUrl = `${import.meta.env.BASE_URL}assets/nexotrace-logo.png`;
 const boardUrl = `${import.meta.env.BASE_URL}assets/nexotrace-board.png`;
@@ -115,6 +124,29 @@ function formatDateTime(value: string): string {
 function formatCurrency(value?: number): string {
   if (typeof value !== "number") return "Nao informado";
   return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function formatCompactCurrency(value?: number): string {
+  if (typeof value !== "number") return "R$ 0";
+  return value.toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    notation: "compact",
+    maximumFractionDigits: 1,
+  });
+}
+
+function compactDisplay(parts: Array<string | undefined>): string {
+  const value = parts.map((part) => part?.trim()).filter(Boolean).join(" / ");
+  return value || "Nao informado";
+}
+
+function getProxyBaseUrl(): string | undefined {
+  const configured = import.meta.env.VITE_NEXOTRACE_API_BASE_URL as string | undefined;
+  if (configured) return configured;
+  if (window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost") return window.location.origin;
+  if (window.location.hostname.endsWith(".onrender.com")) return window.location.origin;
+  return undefined;
 }
 
 function downloadText(filename: string, content: string, type = "application/json"): void {
@@ -178,6 +210,7 @@ function safeFilename(dossier: Dossier, ext: string): string {
 
 function sourceIcon(source: string) {
   if (source.toLowerCase().includes("pncp")) return <Briefcase size={18} />;
+  if (source.toLowerCase().includes("compras")) return <Briefcase size={18} />;
   if (source.toLowerCase().includes("transparencia")) return <Scale size={18} />;
   if (source.toLowerCase().includes("cnj")) return <Gavel size={18} />;
   if (source.toLowerCase().includes("news")) return <Newspaper size={18} />;
@@ -190,6 +223,7 @@ export default function App() {
   const [dossiers, setDossiers] = useState<Dossier[]>(initialDossiers);
   const [activeDossier, setActiveDossier] = useState<Dossier | null>(initialDossiers[0] || null);
   const [audit, setAudit] = useState<AuditEntry[]>(() => loadAudit());
+  const [connectorSettings, setConnectorSettings] = useState(() => loadConnectorSettings());
   const [documentInput, setDocumentInput] = useState("");
   const [purpose, setPurpose] = useState(PURPOSES[0]);
   const [legalBasis, setLegalBasis] = useState(LEGAL_BASES[0]);
@@ -238,6 +272,10 @@ export default function App() {
     try {
       if (type === "CNPJ") {
         const company = await fetchCompanyByCnpj(digits);
+        const contracts = await fetchContractIntelligence(digits, {
+          portalApiKey: connectorSettings.portalTransparencyApiKey,
+          proxyBaseUrl: getProxyBaseUrl(),
+        });
         const collectedAt = nowIso();
         const evidenceHash = await sha256(JSON.stringify(company.raw));
         const evidence: Evidence = {
@@ -252,7 +290,39 @@ export default function App() {
           confidence: "Media",
           notes: "Fonte publica agregada. Confirme em fonte oficial quando a decisao exigir prova primaria.",
         };
-        const externalChecks = buildExternalChecks(company);
+        const collectedEvidence: Evidence[] = [evidence];
+
+        if (contracts.supplierRegistry?.status === "Consultado") {
+          collectedEvidence.push({
+            id: uid("evidence"),
+            title: "Cadastro de fornecedor Compras.gov.br",
+            source: "Compras.gov.br Dados Abertos",
+            sourceType: "Oficial",
+            url: contracts.supplierRegistry.sourceUrl,
+            collectedAt: contracts.supplierRegistry.collectedAt,
+            hash: await sha256(JSON.stringify(contracts.supplierRegistry.raw || contracts.supplierRegistry)),
+            status: "Confirmada",
+            confidence: "Alta",
+            notes: contracts.supplierRegistry.enabledToBid === false ? "Fornecedor retornou sem habilitacao para licitar." : "Fornecedor localizado em base oficial de compras publicas.",
+          });
+        }
+
+        if (contracts.status === "Consultado") {
+          collectedEvidence.push({
+            id: uid("evidence"),
+            title: "Contratos publicos por fornecedor",
+            source: contracts.source,
+            sourceType: "Oficial",
+            url: contracts.portalTransparencyUrl,
+            collectedAt: contracts.collectedAt,
+            hash: await sha256(JSON.stringify(contracts.contracts.map((contract) => contract.raw || contract))),
+            status: contracts.totalContracts > 0 ? "Confirmada" : "Nao confirmada",
+            confidence: "Alta",
+            notes: `${contracts.totalContracts} contrato(s) coletado(s), valor final somado ${formatCurrency(contracts.totalFinalValue)}.`,
+          });
+        }
+
+        const externalChecks = buildExternalChecks(company, contracts);
         const auditEntry = makeAudit(
           "CONSULTA_CNPJ",
           "CNPJ",
@@ -261,7 +331,7 @@ export default function App() {
           legalBasis,
           userProfile,
           "Concluida",
-          "Consulta cadastral concluida e dossie criado.",
+          `Consulta cadastral concluida. Contratos: ${contracts.status}.`,
         );
         const dossier: Dossier = {
           id: uid("case"),
@@ -274,8 +344,9 @@ export default function App() {
           justification,
           userProfile,
           company,
+          contracts,
           risk: calculateCompanyRisk(company),
-          evidences: [evidence],
+          evidences: collectedEvidence,
           externalChecks,
           auditTrail: [auditEntry],
           analystNotes: [],
@@ -472,11 +543,23 @@ export default function App() {
     window.setTimeout(() => window.print(), 80);
   }
 
+  function handleConfigureConnectors() {
+    const current = connectorSettings.portalTransparencyApiKey || "";
+    const next = window.prompt("Chave API de Dados CGU para contratos por fornecedor:", current);
+    if (next === null) return;
+    const saved = saveConnectorSettings({
+      ...connectorSettings,
+      portalTransparencyApiKey: next.trim() || undefined,
+    });
+    setConnectorSettings(saved);
+  }
+
   function handleClearWorkspace() {
     if (!window.confirm("Apagar dossies e auditoria local deste navegador?")) return;
     clearWorkspace();
     setDossiers([]);
     setAudit([]);
+    setConnectorSettings({});
     setActiveDossier(null);
     setTab("overview");
   }
@@ -556,6 +639,9 @@ export default function App() {
             </button>
             <button className="icon-button" title="Gerar PDF" disabled={!activeDossier || !canExport} onClick={handlePrint}>
               <Printer size={18} />
+            </button>
+            <button className="icon-button" title="Configurar conectores" onClick={handleConfigureConnectors}>
+              <Settings size={18} />
             </button>
             <span className="status-pill">
               <Lock size={14} />
@@ -710,7 +796,8 @@ function DossierView({
     { label: "Evidencias", value: activeDossier.evidences.length, icon: <FileText size={18} /> },
     { label: "Fontes", value: activeDossier.externalChecks.length, icon: <Database size={18} /> },
     { label: "Socios", value: activeDossier.company?.partners.length || 0, icon: <Users size={18} /> },
-    { label: "Score", value: activeDossier.risk.level === "Restrito" ? "RST" : activeDossier.risk.score, icon: <Gauge size={18} /> },
+    { label: "Contratos", value: activeDossier.contracts?.totalContracts || 0, icon: <Briefcase size={18} /> },
+    { label: "Valor contratos", value: formatCompactCurrency(activeDossier.contracts?.totalFinalValue), icon: <Scale size={18} /> },
   ];
 
   return (
@@ -753,6 +840,7 @@ function DossierView({
         <TabButton id="overview" active={tab} setTab={setTab} icon={<Activity size={16} />} label="Visao geral" />
         <TabButton id="cadastro" active={tab} setTab={setTab} icon={<Building2 size={16} />} label="Cadastro" />
         <TabButton id="socios" active={tab} setTab={setTab} icon={<Network size={16} />} label="Vinculos" />
+        <TabButton id="contratos" active={tab} setTab={setTab} icon={<Briefcase size={16} />} label="Contratos" />
         <TabButton id="fontes" active={tab} setTab={setTab} icon={<Link2 size={16} />} label="Fontes" />
         <TabButton id="evidencias" active={tab} setTab={setTab} icon={<FileText size={16} />} label="Evidencias" />
         <TabButton id="auditoria" active={tab} setTab={setTab} icon={<History size={16} />} label="Auditoria" />
@@ -762,6 +850,7 @@ function DossierView({
         {tab === "overview" ? <Overview dossier={activeDossier} /> : null}
         {tab === "cadastro" ? <Cadastro dossier={activeDossier} /> : null}
         {tab === "socios" ? <Socios dossier={activeDossier} /> : null}
+        {tab === "contratos" ? <Contratos dossier={activeDossier} /> : null}
         {tab === "fontes" ? <Fontes checks={activeDossier.externalChecks} /> : null}
         {tab === "evidencias" ? (
           <Evidencias
@@ -840,6 +929,8 @@ function Overview({ dossier }: { dossier: Dossier }) {
           <DataPoint label="Abertura" value={formatDate(company?.openedAt)} />
           <DataPoint label="Natureza" value={company?.legalNature || "Nao informado"} />
           <DataPoint label="Capital" value={formatCurrency(company?.capitalSocial)} />
+          <DataPoint label="Contratos publicos" value={String(dossier.contracts?.totalContracts || 0)} />
+          <DataPoint label="Valor contratos" value={formatCurrency(dossier.contracts?.totalFinalValue)} />
           <DataPoint label="Finalidade" value={dossier.purpose} />
           <DataPoint label="Base legal" value={dossier.legalBasis} />
         </div>
@@ -987,6 +1078,146 @@ function Socios({ dossier }: { dossier: Dossier }) {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+function Contratos({ dossier }: { dossier: Dossier }) {
+  const contracts = dossier.contracts;
+
+  if (!contracts) {
+    return (
+      <div className="panel-block">
+        <div className="section-heading">
+          <Briefcase size={19} />
+          <h3>Contratos publicos</h3>
+        </div>
+        <p className="muted">Nenhuma coleta operacional foi executada para este dossie.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="contract-layout">
+      <section className="panel-block">
+        <div className="section-heading">
+          <Briefcase size={19} />
+          <h3>Contratos publicos</h3>
+        </div>
+
+        <div className="data-grid contract-summary">
+          <DataPoint label="Status da coleta" value={contracts.status} />
+          <DataPoint label="Fonte de contratos" value={contracts.source} />
+          <DataPoint label="Contratos localizados" value={String(contracts.totalContracts)} />
+          <DataPoint label="Contratos vigentes" value={String(contracts.activeContracts)} />
+          <DataPoint label="Valor inicial somado" value={formatCurrency(contracts.totalInitialValue)} />
+          <DataPoint label="Valor final somado" value={formatCurrency(contracts.totalFinalValue)} />
+        </div>
+
+        {contracts.status === "Requer chave" || contracts.status === "Indisponivel" ? (
+          <div className="compliance-box warning-box">
+            <KeyRound size={18} />
+            <span>
+              Contratos federais por CNPJ do fornecedor exigem chave da API de Dados da CGU ou proxy Render configurado.
+            </span>
+          </div>
+        ) : null}
+
+        {contracts.notes.length ? (
+          <ul className="limitation-list">
+            {contracts.notes.map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        ) : null}
+
+        <div className="contract-actions no-print">
+          <a href={contracts.portalTransparencyUrl} target="_blank" rel="noreferrer">
+            <ExternalLinkIcon size={16} />
+            Portal da Transparencia
+          </a>
+          <a href={contracts.pncpSearchUrl} target="_blank" rel="noreferrer">
+            <ExternalLinkIcon size={16} />
+            PNCP filtrado
+          </a>
+        </div>
+      </section>
+
+      <section className="panel-block">
+        <div className="section-heading">
+          <Database size={19} />
+          <h3>Fornecedor em compras publicas</h3>
+        </div>
+        {contracts.supplierRegistry ? (
+          <div className="data-grid dense">
+            <DataPoint label="Status" value={contracts.supplierRegistry.status} />
+            <DataPoint
+              label="Habilitado licitar"
+              value={contracts.supplierRegistry.enabledToBid === undefined ? "Nao informado" : contracts.supplierRegistry.enabledToBid ? "Sim" : "Nao"}
+            />
+            <DataPoint label="Razao social" value={contracts.supplierRegistry.legalName || "Nao informado"} />
+            <DataPoint label="CNAE" value={contracts.supplierRegistry.cnae || "Nao informado"} wide />
+            <DataPoint label="Natureza" value={contracts.supplierRegistry.legalNature || "Nao informado"} />
+            <DataPoint label="Porte" value={contracts.supplierRegistry.size || "Nao informado"} />
+            <DataPoint label="Municipio/UF" value={compactDisplay([contracts.supplierRegistry.city, contracts.supplierRegistry.state])} />
+          </div>
+        ) : (
+          <p className="muted">Cadastro de fornecedor nao consultado.</p>
+        )}
+      </section>
+
+      <section className="panel-block span-2">
+        <div className="section-heading">
+          <FileText size={19} />
+          <h3>Lista de contratos</h3>
+        </div>
+        {contracts.contracts.length === 0 ? (
+          <p className="muted">Nenhum contrato foi coletado automaticamente nesta consulta.</p>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Contrato</th>
+                  <th>Orgao / unidade</th>
+                  <th>Objeto</th>
+                  <th>Vigencia</th>
+                  <th>Valor</th>
+                  <th>Fonte</th>
+                </tr>
+              </thead>
+              <tbody>
+                {contracts.contracts.map((contract) => (
+                  <tr key={contract.id}>
+                    <td>
+                      <strong>{contract.number || "Nao informado"}</strong>
+                      <small>{contract.process || contract.status || ""}</small>
+                    </td>
+                    <td>
+                      {contract.agency || "Nao informado"}
+                      <small>{contract.unit || ""}</small>
+                    </td>
+                    <td>{contract.object}</td>
+                    <td>
+                      {formatDate(contract.startDate)} ate {formatDate(contract.endDate)}
+                    </td>
+                    <td>{formatCurrency(contract.finalValue || contract.initialValue)}</td>
+                    <td>
+                      {contract.sourceUrl ? (
+                        <a href={contract.sourceUrl} target="_blank" rel="noreferrer" title="Abrir fonte">
+                          <ExternalLinkIcon size={16} />
+                        </a>
+                      ) : (
+                        contract.source
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -1224,7 +1455,7 @@ function PrintReport({ dossier }: { dossier: Dossier | null }) {
       <h2>Resumo executivo</h2>
       <p>
         {company
-          ? `${company.legalName} consta com situacao ${company.registrationStatus}. O score cadastral calculado foi ${dossier.risk.score} (${dossier.risk.level}).`
+          ? `${company.legalName} consta com situacao ${company.registrationStatus}. O score cadastral calculado foi ${dossier.risk.score} (${dossier.risk.level}). Contratos coletados: ${dossier.contracts?.totalContracts || 0}, valor final somado: ${formatCurrency(dossier.contracts?.totalFinalValue)}.`
           : `CPF validado em modo restrito. Nenhuma busca externa de dados pessoais foi executada.`}
       </p>
 
@@ -1252,6 +1483,32 @@ function PrintReport({ dossier }: { dossier: Dossier | null }) {
               <tr>
                 <th>Capital social</th>
                 <td>{formatCurrency(company.capitalSocial)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </>
+      ) : null}
+
+      {dossier.contracts ? (
+        <>
+          <h2>Contratos publicos</h2>
+          <table>
+            <tbody>
+              <tr>
+                <th>Status da coleta</th>
+                <td>{dossier.contracts.status}</td>
+              </tr>
+              <tr>
+                <th>Fonte</th>
+                <td>{dossier.contracts.source}</td>
+              </tr>
+              <tr>
+                <th>Total de contratos</th>
+                <td>{dossier.contracts.totalContracts}</td>
+              </tr>
+              <tr>
+                <th>Valor final somado</th>
+                <td>{formatCurrency(dossier.contracts.totalFinalValue)}</td>
               </tr>
             </tbody>
           </table>
